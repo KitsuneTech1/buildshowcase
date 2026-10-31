@@ -22,6 +22,8 @@ wheels/
 .coverage
 htmlcov/
 *.log
+.test-tmp/*
+!.test-tmp/.gitkeep
 .venv
 venv/
 ENV/

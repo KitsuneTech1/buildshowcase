@@ -1,24 +1,21 @@
 # buildshowcase
 
-Turn a group of project folders into an honest static launch site.
+Turn a group of local project folders into a static portfolio page.
 
 ## What it does
 
 Given a list of project directories, buildshowcase:
-- Scans each for README, test files, dependencies, and code metrics
-- Scores each project on quality (tests, documentation, dependencies, size)
-- Generates a static HTML portfolio page
-- Ranks projects by score
+- Reads local files only. It does not call a network service or need an API token.
+- Checks for a README, test files, dependency manifests, and source-file count.
+- Scores each project from 0 to 100 and shows the four score components.
+- Finds likely screenshots in `screenshots/`, `demo/`, or files named `preview` or `screenshot`, then embeds them in the HTML.
+- Ranks projects by score, with project name as the tie breaker.
 
 Output is a single self-contained HTML file with no external dependencies.
 
 ## Installation
 
-```bash
-pip install -e .
-```
-
-Or run directly:
+There is no package metadata yet, so run the script directly:
 
 ```bash
 python showcase.py <repo1> [repo2] [repo3] ... [options]
@@ -34,7 +31,7 @@ Generate a portfolio from project folders:
 python showcase.py ~/projects/project-a ~/projects/project-b ~/projects/project-c
 ```
 
-This creates index.html in the current directory.
+This creates `index.html` in the current directory. Existing screenshot files are embedded, so the result does not need the source folders to display them.
 
 ### Custom output filename
 
@@ -63,15 +60,19 @@ The generated HTML file is a static, self-contained portfolio page that:
 - Ranks projects by score, highest first
 - Uses clean, responsive CSS
 
-Open the generated index.html in any browser. No server or build step required.
+Open the generated HTML file in a browser. No server or build step is required.
+
+Directories that do not exist are skipped with a warning. If every supplied path is invalid, the command exits with status 1.
 
 ## Scoring
 
-Each project is scored 0-100 on:
-- Tests: presence of test files (0-25 points)
-- Documentation: README and docs/ directory (0-25 points)
-- Dependencies: package.json, pyproject.toml, Cargo.toml, etc. (0-25 points)
-- Size: favors focused projects under 50 source files (0-25 points)
+Each project is scored 0-100 on four capped components:
+- Tests: test files or test directories (0-25 points)
+- Documentation: a README and `docs/` directory (0-25 points)
+- Dependencies: a common dependency manifest in the project root (0-25 points)
+- Size: source-file count, with smaller projects receiving more points (0-25 points)
+
+The score measures visible repository signals. It does not run tests, inspect code quality, or prove that a project works.
 
 ## Testing
 
