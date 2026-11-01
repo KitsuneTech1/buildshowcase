@@ -6,6 +6,7 @@ import html
 import mimetypes
 import os
 import sys
+import tempfile
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -26,6 +27,52 @@ DEPENDENCY_FILES = {
 SCREENSHOT_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 SCREENSHOT_DIRS = {"demo", "demos", "screenshot", "screenshots"}
 README_NAMES = ("README.md", "README.rst", "README.txt")
+MAX_README_BYTES = 1024 * 1024
+MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024
+
+
+def _is_safe_regular_file(path, max_bytes=None):
+    """Return whether path is a non-symlink regular file within the size limit."""
+    path = Path(path)
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        return max_bytes is None or path.stat().st_size <= max_bytes
+    except OSError:
+        return False
+
+
+def _bounded_int(value, default=0, maximum=None):
+    """Convert display data to an integer without letting malformed input crash rendering."""
+    try:
+        result = int(value)
+    except (TypeError, ValueError, OverflowError):
+        result = default
+    if maximum is not None:
+        result = max(0, min(maximum, result))
+    return result
+
+
+def _is_within_root(root, path):
+    """Return whether path resolves beneath root without following an escape."""
+    try:
+        root = Path(root).resolve()
+        path = Path(path).resolve(strict=True)
+        path.relative_to(root)
+        return True
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
+def _read_bounded_bytes(path, max_bytes):
+    """Read a regular file while enforcing a hard byte limit."""
+    if not _is_safe_regular_file(path, max_bytes):
+        raise OSError("file is not a readable regular file within the size limit")
+    with Path(path).open("rb") as stream:
+        data = stream.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise OSError("file exceeds the size limit")
+    return data
 
 
 def _iter_files(repo_path):
@@ -35,22 +82,26 @@ def _iter_files(repo_path):
         directories[:] = sorted(
             directory
             for directory in directories
-            if directory not in IGNORED_DIRS and not directory.startswith(".")
+            if directory not in IGNORED_DIRS
+            and not directory.startswith(".")
+            and not (Path(root) / directory).is_symlink()
         )
         for filename in sorted(filenames):
-            yield Path(root) / filename
+            path = Path(root) / filename
+            if not path.is_symlink():
+                yield path
 
 
 def _find_readme(repo_path):
     repo_path = Path(repo_path)
     for name in README_NAMES:
         candidate = repo_path / name
-        if candidate.is_file():
+        if _is_safe_regular_file(candidate):
             return candidate
     readme_names = {name.lower() for name in README_NAMES}
     return next(
         (candidate for candidate in repo_path.iterdir()
-         if candidate.is_file() and candidate.name.lower() in readme_names),
+         if _is_safe_regular_file(candidate) and candidate.name.lower() in readme_names),
         None,
     )
 
@@ -122,9 +173,11 @@ def get_repo_description(repo_path):
         readme = _find_readme(repo_path)
     except OSError:
         return "No description available"
-    if readme:
+    if readme and _is_safe_regular_file(readme, MAX_README_BYTES):
         try:
-            text = readme.read_text(encoding="utf-8", errors="replace")
+            text = _read_bounded_bytes(readme, MAX_README_BYTES).decode(
+                "utf-8", errors="replace"
+            )
         except OSError:
             return "No description available"
         for line in text.splitlines():
@@ -139,6 +192,12 @@ def get_repo_description(repo_path):
 
 def find_screenshots(repo_path, limit=3):
     """Find likely screenshots without treating every repository image as one."""
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if limit <= 0:
+        return []
     repo_path = Path(repo_path)
     candidates = []
     for path in _iter_files(repo_path):
@@ -160,7 +219,7 @@ def find_screenshots(repo_path, limit=3):
 def _image_data_uri(path):
     path = Path(path)
     mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    encoded = base64.b64encode(_read_bounded_bytes(path, MAX_SCREENSHOT_BYTES)).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
 
 
@@ -180,10 +239,13 @@ def scan_repo(repo_path):
 
 def _render_screenshots(project, rendered_screenshot_counts=None):
     screenshots = []
-    for path in project.get("screenshots", []):
+    repo_path = project.get("path")
+    for path in project.get("screenshots", []) or []:
+        if not repo_path or not _is_within_root(repo_path, path):
+            continue
         try:
             uri = _image_data_uri(path)
-        except (OSError, ValueError):
+        except (OSError, TypeError, ValueError):
             continue
         alt = html.escape(Path(path).stem.replace("_", " ").replace("-", " "))
         screenshots.append(f'<img src="{uri}" alt="{alt}" loading="lazy">')
@@ -200,7 +262,10 @@ def build_html(projects, output_path, title="Portfolio", rendered_screenshot_cou
     output_path.parent.mkdir(parents=True, exist_ok=True)
     projects_sorted = sorted(
         projects,
-        key=lambda project: (-int(project.get("score", 0)), str(project.get("name", "")).casefold()),
+        key=lambda project: (
+            -_bounded_int(project.get("score", 0), maximum=100),
+            str(project.get("name", "")).casefold(),
+        ),
     )
     safe_title = html.escape(str(title))
 
@@ -208,10 +273,12 @@ def build_html(projects, output_path, title="Portfolio", rendered_screenshot_cou
     for project in projects_sorted:
         name = html.escape(str(project.get("name", "Unnamed project")))
         description = html.escape(str(project.get("description", "No description available")))
-        score = int(project.get("score", 0))
+        score = _bounded_int(project.get("score", 0), maximum=100)
         breakdown = project.get("breakdown", {})
+        if not isinstance(breakdown, dict):
+            breakdown = {}
         details = " / ".join(
-            f"{label}: {int(breakdown.get(key, 0))}/25"
+            f"{label}: {_bounded_int(breakdown.get(key, 0), maximum=25)}/25"
             for key, label in (
                 ("tests", "Tests"),
                 ("documentation", "Docs"),
@@ -268,7 +335,26 @@ def build_html(projects, output_path, title="Portfolio", rendered_screenshot_cou
 </body>
 </html>
 '''
-    output_path.write_text(html_text, encoding="utf-8")
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(html_text)
+        os.replace(temporary_path, output_path)
+    except OSError:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+        raise
     return output_path
 
 
@@ -285,7 +371,11 @@ def main(argv=None):
         if not path.is_dir():
             print(f"Warning: {path} is not a directory, skipping", file=sys.stderr)
             continue
-        projects.append(scan_repo(path))
+        try:
+            projects.append(scan_repo(path))
+        except OSError as error:
+            print(f"Warning: could not read {path}, skipping ({error})", file=sys.stderr)
+            continue
 
     if not projects:
         print("Error: No valid repositories found", file=sys.stderr)

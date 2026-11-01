@@ -2,8 +2,9 @@
 """Tests for buildshowcase."""
 
 import unittest
+import os
 import shutil
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -108,6 +109,25 @@ class TestShowcase(unittest.TestCase):
         self.assertIn('75', html)
         self.assertIn('<!DOCTYPE html>', html)
 
+    def test_build_html_replaces_output_symlink_without_following_it(self):
+        output_path = self.temp_dir / 'linked-output.html'
+        outside_path = self.temp_dir / 'outside-output.html'
+        outside_path.write_text('do not overwrite')
+        try:
+            os.symlink(str(outside_path), str(output_path))
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f'symlinks unavailable: {error}')
+
+        showcase.build_html([{
+            'name': 'Safe output',
+            'description': 'Project',
+            'score': 50,
+        }], output_path)
+
+        self.assertFalse(output_path.is_symlink())
+        self.assertEqual(outside_path.read_text(), 'do not overwrite')
+        self.assertIn('<!DOCTYPE html>', output_path.read_text())
+
     def test_build_html_sorting(self):
         """Test that projects are sorted by score."""
         projects = [
@@ -159,6 +179,72 @@ class TestShowcase(unittest.TestCase):
 
         self.assertEqual(breakdown['tests'], 10)
 
+    def test_scan_repo_ignores_symlinked_readmes_and_screenshots(self):
+        repo_path = self.temp_dir / 'symlink-repo'
+        repo_path.mkdir()
+        outside_readme = self.temp_dir / 'outside.txt'
+        outside_readme.write_text('private content')
+        outside_image = self.temp_dir / 'outside.png'
+        outside_image.write_bytes(b'private image')
+        screenshot_dir = repo_path / 'screenshots'
+        screenshot_dir.mkdir()
+
+        try:
+            os.symlink(str(outside_readme), str(repo_path / 'README.md'))
+            os.symlink(str(outside_image), str(screenshot_dir / 'preview.png'))
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f'symlinks unavailable: {error}')
+
+        project = showcase.scan_repo(repo_path)
+
+        self.assertEqual(project['description'], 'No description available')
+        self.assertEqual(project['breakdown']['documentation'], 0)
+        self.assertEqual(project['screenshots'], [])
+
+    def test_build_html_rejects_screenshot_outside_project_root(self):
+        repo_path = self.temp_dir / 'bounded-repo'
+        repo_path.mkdir()
+        outside_image = self.temp_dir / 'outside.png'
+        outside_image.write_bytes(b'private image')
+        output_path = self.temp_dir / 'bounded.html'
+
+        showcase.build_html([{
+            'name': 'Bounded',
+            'description': 'Project',
+            'score': 50,
+            'path': str(repo_path),
+            'screenshots': [outside_image],
+        }], output_path)
+
+        self.assertNotIn('<img ', output_path.read_text())
+
+    def test_large_readmes_and_screenshots_are_not_loaded(self):
+        repo_path = self.temp_dir / 'large-files'
+        repo_path.mkdir()
+        (repo_path / 'README.md').write_text('12345')
+        screenshot_dir = repo_path / 'screenshots'
+        screenshot_dir.mkdir()
+        (screenshot_dir / 'preview.png').write_bytes(b'12345')
+
+        with patch.object(showcase, 'MAX_README_BYTES', 4), patch.object(
+            showcase, 'MAX_SCREENSHOT_BYTES', 4
+        ):
+            project = showcase.scan_repo(repo_path)
+            output_path = self.temp_dir / 'large-files.html'
+            showcase.build_html([project], output_path)
+
+        self.assertEqual(project['description'], 'No description available')
+        self.assertNotIn('<img ', output_path.read_text())
+
+    def test_find_screenshots_with_negative_limit_returns_none(self):
+        repo_path = self.temp_dir / 'limited-repo'
+        repo_path.mkdir()
+        screenshot_dir = repo_path / 'screenshots'
+        screenshot_dir.mkdir()
+        (screenshot_dir / 'preview.png').write_bytes(b'image')
+
+        self.assertEqual(showcase.find_screenshots(repo_path, -1), [])
+
     def test_scan_repo_finds_screenshots_and_builds_self_contained_html(self):
         repo_path = self.temp_dir / 'visual-repo'
         repo_path.mkdir()
@@ -188,6 +274,20 @@ class TestShowcase(unittest.TestCase):
         self.assertIn('&lt;script&gt;alert(1)&lt;/script&gt;', html)
         self.assertIn('A &amp; B', html)
 
+    def test_build_html_tolerates_malformed_score_data(self):
+        output_path = self.temp_dir / 'malformed.html'
+
+        showcase.build_html([{
+            'name': 'Malformed',
+            'description': 'Project',
+            'score': 'not a score',
+            'breakdown': None,
+        }], output_path)
+
+        html = output_path.read_text()
+        self.assertIn('Score: 0/100', html)
+        self.assertIn('Tests: 0/25', html)
+
     def test_main_skips_invalid_repositories_and_writes_output(self):
         repo_path = self.temp_dir / 'valid-repo'
         repo_path.mkdir()
@@ -210,18 +310,30 @@ class TestShowcase(unittest.TestCase):
         readme = repo_path / 'README.md'
         readme.write_text('# Repo\n\nDescription.')
         output_path = self.temp_dir / 'fallback.html'
-        original_read_text = Path.read_text
+        original_read_bounded_bytes = showcase._read_bounded_bytes
 
-        def read_text(path, *args, **kwargs):
+        def read_bounded_bytes(path, *args, **kwargs):
             if path == readme:
                 raise OSError('read failed')
-            return original_read_text(path, *args, **kwargs)
+            return original_read_bounded_bytes(path, *args, **kwargs)
 
-        with patch.object(Path, 'read_text', new=read_text):
+        with patch.object(showcase, '_read_bounded_bytes', new=read_bounded_bytes):
             result = showcase.main([str(repo_path), '--output', str(output_path)])
 
         self.assertEqual(result, 0)
         self.assertIn('No description available', output_path.read_text())
+
+    def test_main_skips_repository_when_scanning_fails(self):
+        repo_path = self.temp_dir / 'unreadable-repo'
+        repo_path.mkdir()
+        output = StringIO()
+
+        with patch.object(showcase, 'scan_repo', side_effect=OSError('read failed')):
+            with redirect_stderr(output):
+                result = showcase.main([str(repo_path)])
+
+        self.assertEqual(result, 1)
+        self.assertIn('could not read', output.getvalue())
 
     def test_main_reports_only_embedded_screenshots(self):
         repo_path = self.temp_dir / 'broken-screenshot'
