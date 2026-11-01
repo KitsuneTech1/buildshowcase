@@ -3,7 +3,10 @@
 
 import unittest
 import shutil
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 import showcase
 
 
@@ -147,6 +150,15 @@ class TestShowcase(unittest.TestCase):
         self.assertEqual(breakdown['size'], 25)
         self.assertEqual(breakdown['tests'], 10)
 
+    def test_score_breakdown_detects_files_ending_in_test(self):
+        repo_path = self.temp_dir / 'pattern-repo'
+        repo_path.mkdir()
+        (repo_path / 'feature_test.py').write_text('assert True\n')
+
+        breakdown = showcase.score_breakdown(repo_path)
+
+        self.assertEqual(breakdown['tests'], 10)
+
     def test_scan_repo_finds_screenshots_and_builds_self_contained_html(self):
         repo_path = self.temp_dir / 'visual-repo'
         repo_path.mkdir()
@@ -191,6 +203,43 @@ class TestShowcase(unittest.TestCase):
         result = showcase.main([str(self.temp_dir / 'missing')])
 
         self.assertEqual(result, 1)
+
+    def test_main_uses_fallback_when_readme_cannot_be_read(self):
+        repo_path = self.temp_dir / 'unreadable-readme'
+        repo_path.mkdir()
+        readme = repo_path / 'README.md'
+        readme.write_text('# Repo\n\nDescription.')
+        output_path = self.temp_dir / 'fallback.html'
+        original_read_text = Path.read_text
+
+        def read_text(path, *args, **kwargs):
+            if path == readme:
+                raise OSError('read failed')
+            return original_read_text(path, *args, **kwargs)
+
+        with patch.object(Path, 'read_text', new=read_text):
+            result = showcase.main([str(repo_path), '--output', str(output_path)])
+
+        self.assertEqual(result, 0)
+        self.assertIn('No description available', output_path.read_text())
+
+    def test_main_reports_only_embedded_screenshots(self):
+        repo_path = self.temp_dir / 'broken-screenshot'
+        repo_path.mkdir()
+        (repo_path / 'README.md').write_text('# Repo\n\nDescription.')
+        screenshot_dir = repo_path / 'screenshots'
+        screenshot_dir.mkdir()
+        screenshot = screenshot_dir / 'preview.png'
+        screenshot.write_bytes(b'fake image')
+        output_path = self.temp_dir / 'broken-screenshot.html'
+        stdout = StringIO()
+
+        with patch.object(showcase, '_image_data_uri', side_effect=OSError('read failed')):
+            with redirect_stdout(stdout):
+                result = showcase.main([str(repo_path), '--output', str(output_path)])
+
+        self.assertEqual(result, 0)
+        self.assertNotIn('screenshots:', stdout.getvalue())
 
 
 if __name__ == '__main__':

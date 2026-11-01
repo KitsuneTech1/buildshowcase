@@ -58,10 +58,16 @@ def _find_readme(repo_path):
 def _is_test_file(path):
     name = path.name.lower()
     suffix = path.suffix.lower()
+    stem = path.stem.lower()
     return (
         path.parent.name.lower() in {"test", "tests"}
-        or (name.startswith("test") and suffix in SOURCE_EXTENSIONS)
-        or name.endswith((".test.js", ".test.jsx", ".test.ts", ".test.tsx", ".spec.js", ".spec.ts"))
+        or (
+            suffix in SOURCE_EXTENSIONS
+            and (
+                name.startswith("test")
+                or stem.endswith(("_test", ".test", "_spec", ".spec"))
+            )
+        )
     )
 
 
@@ -112,9 +118,15 @@ def get_repo_name(repo_path):
 
 def get_repo_description(repo_path):
     """Extract the first useful paragraph line from a repository README."""
-    readme = _find_readme(repo_path)
+    try:
+        readme = _find_readme(repo_path)
+    except OSError:
+        return "No description available"
     if readme:
-        text = readme.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = readme.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return "No description available"
         for line in text.splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#") or stripped.startswith("!["):
@@ -166,7 +178,7 @@ def scan_repo(repo_path):
     }
 
 
-def _render_screenshots(project):
+def _render_screenshots(project, rendered_screenshot_counts=None):
     screenshots = []
     for path in project.get("screenshots", []):
         try:
@@ -175,12 +187,14 @@ def _render_screenshots(project):
             continue
         alt = html.escape(Path(path).stem.replace("_", " ").replace("-", " "))
         screenshots.append(f'<img src="{uri}" alt="{alt}" loading="lazy">')
+    if rendered_screenshot_counts is not None:
+        rendered_screenshot_counts[id(project)] = len(screenshots)
     if not screenshots:
         return '<p class="no-screenshot">No screenshots found.</p>'
     return '<div class="screenshots">' + "".join(screenshots) + '</div>'
 
 
-def build_html(projects, output_path, title="Portfolio"):
+def build_html(projects, output_path, title="Portfolio", rendered_screenshot_counts=None):
     """Generate a static, self-contained HTML portfolio page."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,7 +223,7 @@ def build_html(projects, output_path, title="Portfolio"):
             f'''            <article class="project">
                 <h2>{name}</h2>
                 <p>{description}</p>
-                {_render_screenshots(project)}
+                {_render_screenshots(project, rendered_screenshot_counts)}
                 <div class="score">Score: {score}/100</div>
                 <p class="breakdown">{html.escape(details)}</p>
             </article>
@@ -277,11 +291,17 @@ def main(argv=None):
         print("Error: No valid repositories found", file=sys.stderr)
         return 1
 
-    output_path = build_html(projects, args.output, args.title)
+    rendered_screenshot_counts = {}
+    output_path = build_html(
+        projects,
+        args.output,
+        args.title,
+        rendered_screenshot_counts=rendered_screenshot_counts,
+    )
     print(f"Generated showcase: {output_path}")
     print(f"Projects: {len(projects)}")
     for project in sorted(projects, key=lambda item: (-item["score"], item["name"].casefold())):
-        screenshot_count = len(project["screenshots"])
+        screenshot_count = rendered_screenshot_counts.get(id(project), 0)
         visual_note = f", screenshots: {screenshot_count}" if screenshot_count else ""
         print(f"  {project['name']:30} {project['score']:3}/100{visual_note}")
     return 0
