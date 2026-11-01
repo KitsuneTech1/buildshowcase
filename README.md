@@ -23,12 +23,14 @@ python showcase.py <repo1> [repo2] [repo3] ... [options]
 
 ## Usage
 
+The examples below use paths relative to the current directory. Pass project folders explicitly so the commands work in PowerShell and Unix-like shells.
+
 ### Basic usage
 
 Generate a portfolio from project folders:
 
 ```bash
-python showcase.py ~/projects/project-a ~/projects/project-b ~/projects/project-c
+python showcase.py projects/project-a projects/project-b projects/project-c
 ```
 
 This creates `index.html` in the current directory. Existing screenshot files are embedded, so the result does not need the source folders to display them.
@@ -36,19 +38,19 @@ This creates `index.html` in the current directory. Existing screenshot files ar
 ### Custom output filename
 
 ```bash
-python showcase.py ~/projects/* --output portfolio.html
+python showcase.py projects/project-a projects/project-b --output portfolio.html
 ```
 
 ### Custom title
 
 ```bash
-python showcase.py ~/projects/* --title "My Work"
+python showcase.py projects/project-a projects/project-b --title "My Work"
 ```
 
 ### Multiple options
 
 ```bash
-python showcase.py ~/projects/a ~/projects/b --output my-portfolio.html --title "Software Engineering"
+python showcase.py projects/project-a projects/project-b --output my-portfolio.html --title "Software Engineering"
 ```
 
 ## Output
