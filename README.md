@@ -21,6 +21,9 @@ There is no package metadata yet, so run the script directly:
 python showcase.py <repo1> [repo2] [repo3] ... [options]
 ```
 
+The repository includes three small example projects under `projects/`, so the
+commands below work immediately after a fresh checkout.
+
 ## Usage
 
 The examples below use paths relative to the current directory. Pass project folders explicitly so the commands work in PowerShell and Unix-like shells.
@@ -85,12 +88,12 @@ python -m unittest test_showcase
 ## Example
 
 ```bash
-$ python showcase.py ~/code/tool-a ~/code/tool-b ~/code/tool-c
+$ python showcase.py projects/project-a projects/project-b projects/project-c
 Generated showcase: index.html
 Projects: 3
-  tool-b                          89/100
-  tool-a                          76/100
-  tool-c                          54/100
+  project-a                       85/100
+  project-b                       60/100
+  project-c                       35/100
 ```
 
 ## License
