@@ -4,7 +4,19 @@
 
 Turn a group of project folders into a static portfolio page. (Repo: buildshowcase)
 
+[![Build Status](https://github.com/KitsuneTech1/buildshowcase/actions/workflows/ci.yml/badge.svg)](https://github.com/KitsuneTech1/buildshowcase/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) ![Python](https://img.shields.io/badge/Python-3.6+-blue.svg)
+
+
+## Architecture & Data Flow
+
+```mermaid
+flowchart TD
+    A[Scan Local Project Folders] --> B[Read Metadata, READMEs & Git Stats]
+    B --> C[Score & Sort Projects by Quality Metrics]
+    C --> D[HTML / CSS Portfolio Static Generator]
+    D --> E[Deployable Showcase Site: index.html]
+```
 
 ## Quick start
 
